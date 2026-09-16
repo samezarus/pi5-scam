@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pi5-scam — камера</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand">📷 pi5-scam</span>
+    <nav class="tabs">
+      <button class="tab active" data-tab="live">Прямой эфир</button>
+      <button class="tab" data-tab="gallery">Галерея</button>
+    </nav>
+    <div class="controls">
+      <span class="hint">Поток: <span id="hint-stream">{{ stream }}</span> · фото: <span id="hint-photo">{{ photo }}</span></span>
+      <button id="btn-stream" class="btn primary">⏹ Остановить поток</button>
+      <button id="btn-capture" class="btn accent">📸 Сделать фото</button>
+      <span id="capture-status" class="status"></span>
+      <button id="btn-settings" class="btn icon-btn" title="Настройки">⚙</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="live" class="panel active">
+      <div class="stream-frame">
+        <img id="stream" alt="Живой поток с камеры">
+        <div id="stream-off" class="stream-off"><p>Поток остановлен</p></div>
+      </div>
+    </section>
+
+    <section id="gallery" class="panel">
+      <div class="gallery-bar">
+        <h2>Снимки <span id="gallery-count" class="muted"></span></h2>
+        <button id="btn-refresh" class="btn">⟳ Обновить</button>
+      </div>
+      <div id="gallery-grid" class="gallery-grid"></div>
+      <p id="gallery-empty" class="empty">Снимков пока нет — сделайте первое фото во вкладке «Прямой эфир».</p>
+    </section>
+  </main>
+
+  <div id="lightbox" class="lightbox hidden">
+    <img id="lightbox-img" alt="Просмотр снимка">
+    <div class="lightbox-bar">
+      <span id="lightbox-title" class="muted"></span>
+      <a id="lb-download" class="btn" download>⬇ Скачать</a>
+      <button id="lb-delete" class="btn danger">🗑 Удалить</button>
+      <button id="lb-close" class="btn">Закрыть</button>
+    </div>
+  </div>
+
+  <div id="settings" class="modal hidden">
+    <div class="modal-box">
+      <h2>⚙ Настройки</h2>
+      <label class="field">
+        <span>Разрешение видеопотока</span>
+        <select id="set-stream"></select>
+      </label>
+      <label class="field">
+        <span>Разрешение фото</span>
+        <select id="set-photo"></select>
+      </label>
+      <p class="muted small">Применяется сразу и сохраняется в .env (переживает перезапуск).</p>
+      <div class="modal-actions">
+        <button id="set-close" class="btn">Отмена</button>
+        <button id="set-save" class="btn primary">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

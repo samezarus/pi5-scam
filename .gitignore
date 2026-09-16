@@ -11,3 +11,4 @@ __pycache__/
 
 # Снимки камеры
 photos/*.jpg
+hailort.log

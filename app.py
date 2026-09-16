@@ -20,6 +20,8 @@ from flask import (Flask, Response, jsonify, render_template, request,
 from picamera2 import Picamera2
 from simplejpeg import encode_jpeg
 
+import apu
+
 # ---------------------------------------------------------------- конфигурация
 BASE_DIR = Path(__file__).resolve().parent
 ENV_PATH = BASE_DIR / ".env"          # сюда пишутся настройки из веб-интерфейса
@@ -76,6 +78,7 @@ class Camera:
         self._cam_lock = threading.Lock()    # доступ к камере (кадры/снимок)
         self._frame_lock = threading.Lock()  # последний JPEG-кадр
         self._latest_jpeg = None
+        self._latest_frame = None            # сырой кадр (XBGR8888) для APU
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._thread.start()
@@ -122,6 +125,7 @@ class Camera:
                                    colorspace=FRAME_COLORSPACE)
                 with self._frame_lock:
                     self._latest_jpeg = jpeg
+                    self._latest_frame = frame
             except Exception as exc:  # камера временно в still-режиме
                 log.debug("Кадр пропущен: %s", exc)
                 time.sleep(0.05)
@@ -129,6 +133,11 @@ class Camera:
     def latest_jpeg(self):
         with self._frame_lock:
             return self._latest_jpeg
+
+    def latest_frame(self):
+        """Последний сырой кадр (XBGR8888, копия уже сделана в цикле)."""
+        with self._frame_lock:
+            return self._latest_frame
 
     def capture_photo(self, path: Path) -> None:
         with self._cam_lock:
@@ -146,6 +155,11 @@ class Camera:
 camera = Camera(CAMERA_NUM, (STREAM_WIDTH, STREAM_HEIGHT),
                 (PHOTO_WIDTH, PHOTO_HEIGHT))
 atexit.register(camera.close)
+
+# APU (Raspberry Pi AI HAT+ 26T, Hailo-8): детектор живёт лениво —
+# стартует по запросу из вкладки «⚡ APU», в простое чип свободен
+apu_detector = apu.ApuDetector(camera.latest_frame, JPEG_QUALITY)
+atexit.register(apu_detector.stop)
 
 # ----------------------------------------------------------------------- Flask
 app = Flask(__name__)
@@ -262,6 +276,67 @@ def photo_delete(name):
     path.unlink()
     log.info("Снимок удалён: %s", name)
     return jsonify(ok=True)
+
+
+# ------------------------------------------------------------------- APU (Hailo)
+@app.get("/api/apu/status")
+def apu_status():
+    """Всё для вкладки ⚡ APU: система, чип, телеметрия, статистика детекции."""
+    return jsonify(
+        system=apu.system_info(),
+        device=apu.device_info(apu_detector.vdevice),
+        detector=apu_detector.stats(),
+        specs=apu.SPECS,
+        capabilities=apu.CAPABILITIES,
+    )
+
+
+@app.get("/api/apu/models")
+def apu_models():
+    return jsonify(apu.list_models())
+
+
+@app.post("/api/apu/detect")
+def apu_detect():
+    if not apu.HAVE_HAILORT:
+        return jsonify(error="HailoRT не установлен "
+                             "(sudo apt install hailort python3-hailort)"), 503
+    data = request.get_json(silent=True) or {}
+    model = data.get("model") or apu.default_model()
+    if data.get("running", True):
+        known = {m["file"]: m for m in apu.list_models()}
+        if model not in known:
+            return jsonify(error=f"Неизвестная модель: {model}"), 400
+        if not known[model]["supported"]:
+            return jsonify(error="Модель пока не поддерживается"), 400
+        try:
+            apu_detector.start(model)
+        except Exception as exc:
+            log.exception("Не удалось запустить детекцию")
+            return jsonify(error=str(exc)), 500
+    else:
+        apu_detector.stop()
+    return jsonify(apu_detector.stats())
+
+
+@app.get("/stream-apu.mjpg")
+def apu_stream():
+    if not apu_detector.running():
+        return jsonify(error="Детекция не запущена"), 503
+
+    def generate():
+        while True:
+            jpeg = apu_detector.latest_jpeg()
+            if jpeg is None:
+                time.sleep(0.05)
+                continue
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\n"
+                   b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
+                   + jpeg + b"\r\n")
+            time.sleep(1.0 / 25)
+
+    return Response(generate(),
+                    mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
 if __name__ == "__main__":

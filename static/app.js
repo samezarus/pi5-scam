@@ -10,6 +10,13 @@ document.querySelectorAll(".tab").forEach((tab) => {
     document.querySelectorAll(".panel").forEach((p) =>
       p.classList.toggle("active", p.id === tab.dataset.tab));
     if (tab.dataset.tab === "gallery") loadGallery();
+    if (tab.dataset.tab === "apu") {
+      loadApuModels();
+      loadApuStatus();
+      startApuPolling();
+    } else {
+      stopApuPolling();
+    }
   });
 });
 
@@ -80,6 +87,188 @@ async function loadGallery() {
 }
 
 $("#btn-refresh").addEventListener("click", loadGallery);
+
+/* ---------- APU (AI HAT+) ---------- */
+const apuStreamImg = $("#apu-stream");
+let apuRunning = false;
+let apuStatusTimer = null;
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function loadApuModels(selected) {
+  const sel = $("#apu-model");
+  try {
+    const models = await (await fetch("/api/apu/models")).json();
+    sel.innerHTML = "";
+    for (const m of models) {
+      const opt = document.createElement("option");
+      opt.value = m.file;
+      opt.textContent = m.name + (m.supported ? "" : " — скоро");
+      opt.disabled = !m.supported;
+      sel.appendChild(opt);
+    }
+    const target = selected ||
+      [...sel.options].find((o) => !o.disabled)?.value;
+    if (target) sel.value = target;
+  } catch {
+    toast("Не удалось загрузить модели APU", true);
+  }
+}
+
+function setApuUI(on) {
+  apuRunning = on;
+  apuStreamImg.src = on ? "/stream-apu.mjpg" : "";
+  $("#apu-off").style.display = on ? "none" : "flex";
+  const btn = $("#btn-apu");
+  btn.textContent = on ? "⏹ Остановить" : "▶ Запустить детекцию";
+  btn.classList.toggle("primary", !on);
+  btn.classList.toggle("danger", on);
+  if (!on) $("#apu-stats").classList.add("hidden");
+}
+
+async function toggleApu() {
+  const btn = $("#btn-apu");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/apu/detect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        running: !apuRunning,
+        model: $("#apu-model").value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    setApuUI(data.running);
+    if (data.running) loadApuStatus();
+  } catch (err) {
+    toast("APU: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$("#btn-apu").addEventListener("click", toggleApu);
+$("#apu-model").addEventListener("change", async () => {
+  // смена модели на лету: перезапуск, если детекция идёт
+  if (!apuRunning) return;
+  await toggleApu();          // остановить…
+  await toggleApu();          // …и запустить с новой моделью
+});
+
+function startApuPolling() {
+  stopApuPolling();
+  apuStatusTimer = setInterval(loadApuStatus, 4000);
+}
+
+function stopApuPolling() {
+  if (apuStatusTimer) clearInterval(apuStatusTimer);
+  apuStatusTimer = null;
+}
+
+function apuCard(title, bodyHtml) {
+  return `<div class="apu-card"><h3>${title}</h3>${bodyHtml}</div>`;
+}
+
+function apuRows(pairs) {
+  return `<dl>${pairs
+    .filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`)
+    .join("")}</dl>`;
+}
+
+function renderApuStats(d) {
+  const el = $("#apu-stats");
+  if (!d.running) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  el.textContent =
+    `${d.model} · ${d.fps} fps · инференс ${d.infer_ms} мс · объектов: ${d.objects}`;
+}
+
+function renderApuCards(s) {
+  const sys = s.system, dev = s.device, det = s.detector;
+  const cards = [];
+
+  // Состояние
+  const ok = sys.present;
+  const hr = sys.hailort;
+  cards.push(apuCard("Состояние", apuRows([
+    ["Ускоритель", `<span class="apu-dot ${ok ? "ok" : "err"}"></span>${ok ? "обнаружен" : "не найден"}`],
+    ["Устройство", sys.device_nodes.join(", ")],
+    ["HailoRT", hr.available ? `v${hr.version}` : "не установлен"],
+    ["Детекция", det.running ? `работает (${det.model})` : "остановлена"],
+  ])));
+
+  // PCIe
+  const pci = sys.pci[0];
+  if (pci) cards.push(apuCard("PCIe-подключение", apuRows([
+    ["Шина", pci.slot],
+    ["Устройство", `Hailo ${esc(pci.ids)}`],
+    ["Драйвер", pci.driver],
+    ["Канал", pci.link],
+    ["Пропускная способность", pci.bandwidth],
+  ])));
+
+  // Чип и прошивка
+  const fwFiles = sys.firmware
+    .map((f) => `${esc(f.name)} (${(f.size / 1024).toFixed(0)} КБ)`)
+    .join("<br>");
+  if (dev.available) {
+    cards.push(apuCard("Чип и прошивка", apuRows([
+      ["Плата", esc(dev.board_name || dev.product_name)],
+      ["Архитектура", esc(dev.device_architecture)],
+      ["Прошивка", esc(dev.firmware_version)],
+      ["Part Number", esc(dev.part_number)],
+      ["Серийный номер", esc(dev.serial_number)],
+      ["Файл прошивки", fwFiles],
+    ])));
+    cards.push(apuCard("Телеметрия", apuRows([
+      ["Температура", `ts0 ${dev.temperature.ts0} °C · ts1 ${dev.temperature.ts1} °C`],
+      ["Частота NN-ядра", `${dev.nn_core_clock_mhz} МГц`],
+      ["Потребление", "не поддерживается платой"],
+    ])));
+  } else {
+    cards.push(apuCard("Чип и прошивка", apuRows([
+      ["Файл прошивки", fwFiles],
+      ["HailoRT", esc(dev.error || "недоступен")],
+    ])));
+  }
+
+  // Характеристики
+  const sp = s.specs;
+  cards.push(apuCard("Характеристики", apuRows([
+    ["Плата", esc(sp.product)],
+    ["Чип", esc(sp.chip)],
+    ["Производительность", esc(sp.performance)],
+    ["Интерфейс", esc(sp.interface)],
+    ["Примечание", esc(sp.note)],
+  ])));
+
+  // Возможности
+  cards.push(apuCard("Что умеет APU",
+    `<ul>${s.capabilities.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` +
+    (sys.journal.length
+      ? `<div class="journal">${esc(sys.journal.slice(-3).join("\n"))}</div>`
+      : "")));
+
+  $("#apu-cards").innerHTML = cards.join("");
+}
+
+async function loadApuStatus() {
+  try {
+    const s = await (await fetch("/api/apu/status")).json();
+    renderApuCards(s);
+    renderApuStats(s.detector);
+    if (s.detector.running !== apuRunning) {
+      setApuUI(s.detector.running);
+      if (s.detector.running) await loadApuModels(s.detector.file);
+    }
+  } catch { /* тихо: вкладка может быть неактивна */ }
+}
 
 /* ---------- Полноэкранный просмотр ---------- */
 const lightbox = $("#lightbox");
@@ -206,3 +395,4 @@ $("#set-save").addEventListener("click", async () => {
 /* ---------- Инициализация ---------- */
 setStream(true);
 loadGallery();
+loadApuModels();

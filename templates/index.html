@@ -13,6 +13,7 @@
     <nav class="tabs">
       <button class="tab active" data-tab="live">Прямой эфир</button>
       <button class="tab" data-tab="gallery">Галерея</button>
+      <button class="tab" data-tab="apu">⚡ APU</button>
     </nav>
     <div class="controls">
       <span class="hint">Поток: <span id="hint-stream">{{ stream }}</span> · фото: <span id="hint-photo">{{ photo }}</span></span>
@@ -38,6 +39,24 @@
       </div>
       <div id="gallery-grid" class="gallery-grid"></div>
       <p id="gallery-empty" class="empty">Снимков пока нет — сделайте первое фото во вкладке «Прямой эфир».</p>
+    </section>
+
+    <section id="apu" class="panel">
+      <div class="apu-wrap">
+        <div class="apu-bar">
+          <h2>⚡ APU — Raspberry Pi AI HAT+ (26 TOPS)</h2>
+          <div class="apu-controls">
+            <select id="apu-model" class="apu-select" title="Модель детекции"></select>
+            <button id="btn-apu" class="btn primary">▶ Запустить детекцию</button>
+          </div>
+        </div>
+        <div class="stream-frame apu-frame">
+          <img id="apu-stream" alt="Детекция объектов на APU">
+          <div id="apu-off" class="stream-off"><p>Детекция остановлена</p></div>
+          <div id="apu-stats" class="apu-stats hidden"></div>
+        </div>
+        <div id="apu-cards" class="apu-grid"></div>
+      </div>
     </section>
   </main>
 

@@ -12,12 +12,17 @@
 - 🖼 Галерея снимков: просмотр в полном размере, скачивание, удаление
 - ⚙️ Разрешение потока и фото меняется в веб-интерфейсе (применяется сразу,
   сохраняется в `.env` и переживает перезапуск); остальные параметры — через `.env`
+- ⚡ Вкладка **APU** — Raspberry Pi AI HAT+ (26 TOPS, Hailo-8):
+  live-детекция объектов (YOLO) на потоке камеры с рамками и подписями,
+  выбор модели, статистика (FPS, задержка инференса), телеметрия чипа
+  (температура, частота) и карточки с характеристиками ускорителя
 
 ## Структура проекта
 
 ```
 pi5-scam/
-├── app.py               # Flask + Picamera2 (стрим, снимки, API)
+├── app.py               # Flask + Picamera2 (стрим, снимки, API, эндпоинты APU)
+├── apu.py               # Hailo AI HAT+: диагностика, телеметрия, детектор YOLO
 ├── templates/index.html # страница интерфейса
 ├── static/              # style.css, app.js
 ├── photos/              # снимки (создаётся автоматически)
@@ -32,6 +37,15 @@ pi5-scam/
 - Raspberry Pi 5, Raspberry Pi OS (Bookworm/Trixie)
 - Камера IMX219, подключённая к разъёму **cam0**
 - Системные пакеты `python3-picamera2` и `rpicam-apps` (в Raspberry Pi OS уже есть)
+- Для вкладки **⚡ APU** (опционально): плата Raspberry Pi AI HAT+ (26T) и пакеты
+  ```bash
+  sudo apt install -y hailort python3-hailort hailo-models hailort-pcie-driver
+  ```
+  (`python3-hailort` — биндинги HailoRT, видны в venv благодаря
+  `--system-site-packages`; `hailo-models` — HEF-модели в
+  `/usr/share/hailo-models`; версии драйвера и HailoRT должны совпадать —
+  при ошибке `HAILO_INVALID_DRIVER_VERSION` пересоберите/переустановите
+  драйвер и перезагрузите модуль: `sudo modprobe -r hailo_pci && sudo modprobe hailo_pci`)
 
 Проверить, что камера видна системе:
 
@@ -92,12 +106,21 @@ python3 app.py
 | GET | `/api/photos` | список снимков (JSON, новые сверху) |
 | GET | `/photos/<имя>` | файл снимка |
 | DELETE | `/api/photos/<имя>` | удалить снимок |
+| GET | `/api/apu/status` | статус APU: система (PCIe, драйвер, прошивка), идентификация чипа, телеметрия, статистика детекции |
+| GET | `/api/apu/models` | каталог HEF-моделей для Hailo-8 |
+| POST | `/api/apu/detect` | старт/стоп детекции: `{"running": true, "model": "yolov8s_h8.hef"}` (модель опциональна) |
+| GET | `/stream-apu.mjpg` | MJPEG-поток с рамками детекции (503, если детекция не запущена) |
 
 Пример из терминала:
 
 ```bash
 curl -X POST http://localhost:8001/api/capture
 curl http://localhost:8001/api/photos
+# запустить детекцию на APU и посмотреть статистику
+curl -X POST http://localhost:8001/api/apu/detect \
+  -H 'Content-Type: application/json' \
+  -d '{"running": true, "model": "yolov8s_h8.hef"}'
+curl http://localhost:8001/api/apu/status
 ```
 
 ## Автозапуск (опционально)
@@ -132,3 +155,12 @@ sudo systemctl enable --now pi5-scam
 - **Порт занят**: поменяйте `PORT` в `.env`.
 - **Тёмные первые кадры**: автоэкспозиции нужно 1–2 секунды на стабилизацию.
 - **Камера не определилась в rpi5**: Открыть `sudo nano /boot/firmware/config.txt` дописать в конец `dtoverlay=imx219,cam0`
+- **⚡ APU: «HailoRT не установлен»** — установите пакеты из раздела
+  «Требования»; вкладка без них покажет только карточки из sysfs.
+- **⚡ APU: потребление не отображается** — плата AI HAT+ (M.2) не даёт
+  замер мощности через HailoRT; доступна температура чипа.
+- **⚡ APU: модели Pose/Seg заблокированы** — их выход (кейпоинты/маски)
+  пока не обрабатывается пайплайном; детекция работает на
+  `yolov8s_h8.hef` и `yolov6n_h8.hef`.
+- **⚡ APU: `HAILO_INVALID_DRIVER_VERSION`** — версии драйвера ядра и
+  библиотеки HailoRT не совпадают (см. «Требования»).

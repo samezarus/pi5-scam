@@ -14,8 +14,10 @@ document.querySelectorAll(".tab").forEach((tab) => {
       loadApuModels();
       loadApuStatus();
       startApuPolling();
+      if (apuRunning) startApuObjectsPolling();
     } else {
       stopApuPolling();
+      stopApuObjectsPolling();
     }
   });
 });
@@ -126,7 +128,13 @@ function setApuUI(on) {
   btn.textContent = on ? "⏹ Остановить" : "▶ Запустить детекцию";
   btn.classList.toggle("primary", !on);
   btn.classList.toggle("danger", on);
-  if (!on) $("#apu-stats").classList.add("hidden");
+  if (on) {
+    startApuObjectsPolling();
+  } else {
+    $("#apu-stats").classList.add("hidden");
+    $("#apu-objects").classList.add("hidden");
+    stopApuObjectsPolling();
+  }
 }
 
 async function toggleApu() {
@@ -168,6 +176,81 @@ function startApuPolling() {
 function stopApuPolling() {
   if (apuStatusTimer) clearInterval(apuStatusTimer);
   apuStatusTimer = null;
+}
+
+/* ---------- Список найденных объектов ---------- */
+let apuObjectsTimer = null;
+
+function startApuObjectsPolling() {
+  stopApuObjectsPolling();
+  loadApuObjects();
+  apuObjectsTimer = setInterval(loadApuObjects, 1000);
+}
+
+function stopApuObjectsPolling() {
+  if (apuObjectsTimer) clearInterval(apuObjectsTimer);
+  apuObjectsTimer = null;
+}
+
+function fmtClock(epochSec) {
+  return epochSec
+    ? new Date(epochSec * 1000).toLocaleTimeString("ru-RU")
+    : "—";
+}
+
+function renderApuObjects(d) {
+  const box = $("#apu-objects");
+  if (!d.running) {
+    box.classList.add("hidden");
+    return;
+  }
+  box.classList.remove("hidden");
+  $("#apu-objects-total").textContent = d.objects ? `всего: ${d.objects}` : "";
+
+  // агрегаты текущего кадра: метка → {count, color}
+  const agg = new Map();
+  for (const det of d.detections) {
+    const a = agg.get(det.label) || { count: 0, color: det.color };
+    a.count += 1;
+    agg.set(det.label, a);
+  }
+  $("#apu-objects-chips").innerHTML = [...agg.entries()]
+    .map(([label, a]) =>
+      `<span class="apu-chip" style="--chip:${esc(a.color)}">${esc(label)}` +
+      `${a.count > 1 ? ` ×${a.count}` : ""}</span>`)
+    .join("");
+
+  $("#apu-objects-list").innerHTML = d.detections
+    .map((det) => {
+      const w = det.box[2] - det.box[0];
+      const h = det.box[3] - det.box[1];
+      return `<li><span class="dot" style="background:${esc(det.color)}"></span>` +
+        `<span class="lbl">${esc(det.label)}</span>` +
+        `<span class="pct">${Math.round(det.score * 100)}%</span>` +
+        `<span class="dim">${w}×${h} px</span></li>`;
+    })
+    .join("");
+  $("#apu-objects-empty").style.display = d.objects ? "none" : "block";
+
+  // накопленные счётчики за сессию
+  const sess = d.session || { since: 0, frames: 0, labels: {} };
+  const rows = Object.entries(sess.labels)
+    .sort((a, b) => b[1].count - a[1].count);
+  $("#apu-session-summary").textContent =
+    `кадров: ${sess.frames} · старт: ${fmtClock(sess.since)}`;
+  $("#apu-session-rows").innerHTML = rows
+    .map(([label, s]) =>
+      `<tr><td>${esc(label)}</td><td>${s.count}</td>` +
+      `<td>${Math.round((s.score_max || 0) * 100)}%</td>` +
+      `<td>${fmtClock(s.last_seen)}</td></tr>`)
+    .join("");
+  $("#apu-session-empty").style.display = rows.length ? "none" : "block";
+}
+
+async function loadApuObjects() {
+  try {
+    renderApuObjects(await (await fetch("/api/apu/objects")).json());
+  } catch { /* тихо: вкладка может быть неактивна */ }
 }
 
 function apuCard(title, bodyHtml) {

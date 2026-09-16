@@ -296,6 +296,12 @@ def apu_models():
     return jsonify(apu.list_models())
 
 
+@app.get("/api/apu/objects")
+def apu_objects():
+    """Лёгкий список найденных объектов (для опроса ~1 раз/с из UI)."""
+    return jsonify(apu_detector.objects())
+
+
 @app.post("/api/apu/detect")
 def apu_detect():
     if not apu.HAVE_HAILORT:

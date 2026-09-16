@@ -55,6 +55,32 @@
           <div id="apu-off" class="stream-off"><p>Детекция остановлена</p></div>
           <div id="apu-stats" class="apu-stats hidden"></div>
         </div>
+
+        <div id="apu-objects" class="apu-objects hidden">
+          <div class="apu-objects-bar">
+            <h3>🔎 Найденные объекты</h3>
+            <span id="apu-objects-total" class="muted small"></span>
+          </div>
+          <div class="apu-objects-cols">
+            <div class="apu-card">
+              <h3>Сейчас в кадре</h3>
+              <div id="apu-objects-chips" class="apu-chips"></div>
+              <ul id="apu-objects-list" class="apu-obj-list"></ul>
+              <p id="apu-objects-empty" class="empty small">Пока ничего не найдено — наведите камеру на объекты.</p>
+            </div>
+            <div class="apu-card">
+              <h3>За сессию</h3>
+              <p id="apu-session-summary" class="muted small"></p>
+              <table class="apu-table">
+                <thead>
+                  <tr><th>Объект</th><th>Попаданий</th><th>Макс.</th><th>Последний раз</th></tr>
+                </thead>
+                <tbody id="apu-session-rows"></tbody>
+              </table>
+              <p id="apu-session-empty" class="empty small">Сессия только началась…</p>
+            </div>
+          </div>
+        </div>
         <div id="apu-cards" class="apu-grid"></div>
       </div>
     </section>

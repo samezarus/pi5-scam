@@ -270,9 +270,11 @@ class ApuDetector:
         self._labels = COCO_LABELS
         self._latest_jpeg = None
         self._frame_times = []
+        # накопительные счётчики за запуск детекции (сессия)
+        self._session_stats = {"since": 0.0, "frames": 0, "labels": {}}
         self._stats = {"running": False, "model": "", "file": "",
                        "fps": 0.0, "infer_ms": 0.0, "objects": 0,
-                       "by_label": {}}
+                       "by_label": {}, "detections": []}
 
     # ---- состояние (для Flask-эндпоинтов) ----
     @property
@@ -291,6 +293,27 @@ class ApuDetector:
     def latest_jpeg(self):
         with self._stats_lock:
             return self._latest_jpeg
+
+    def objects(self) -> dict:
+        """Лёгкий снимок для частого опроса из UI (без системной диагностики).
+
+        detections — объекты текущего кадра (label/score/box/color),
+        session — накопленные за запуск детекции счётчики по меткам.
+        """
+        with self._stats_lock:
+            return {
+                "running": self.running(),
+                "model": self._stats["model"],
+                "objects": self._stats["objects"],
+                "by_label": self._stats["by_label"],
+                "detections": [dict(d) for d in self._stats["detections"]],
+                "session": {
+                    "since": self._session_stats["since"],
+                    "frames": self._session_stats["frames"],
+                    "labels": {k: dict(v)
+                               for k, v in self._session_stats["labels"].items()},
+                },
+            }
 
     # ---- жизненный цикл ----
     def start(self, model_file: str) -> None:
@@ -350,7 +373,9 @@ class ApuDetector:
         with self._stats_lock:
             self._stats = {"running": True, "model": title,
                            "file": model_file, "fps": 0.0, "infer_ms": 0.0,
-                           "objects": 0, "by_label": {}}
+                           "objects": 0, "by_label": {}, "detections": []}
+            self._session_stats = {"since": time.time(), "frames": 0,
+                                   "labels": {}}
 
     def _teardown_locked(self) -> None:
         if self._thread is not None:
@@ -379,7 +404,8 @@ class ApuDetector:
             self._latest_jpeg = None
             self._stats.update({"running": False, "fps": 0.0,
                                 "infer_ms": 0.0, "objects": 0,
-                                "by_label": {}})
+                                "by_label": {}, "detections": []})
+            self._session_stats = {"since": 0.0, "frames": 0, "labels": {}}
 
     # ---- рабочий цикл ----
     def _loop(self):
@@ -432,16 +458,23 @@ class ApuDetector:
         except TypeError:
             font = ImageFont.load_default()
         by_label = {}
+        detections = []
         for cid, score, x1, y1, x2, y2 in dets:
             color = COLORS[cid % len(COLORS)]
-            label = f"{self._labels[cid % len(self._labels)]} {score:.0%}"
-            key = label.split()[0]
-            by_label[key] = by_label.get(key, 0) + 1
+            name = self._labels[cid % len(self._labels)]
+            label = f"{name} {score:.0%}"
+            by_label[name] = by_label.get(name, 0) + 1
+            detections.append({"label": name, "class_id": cid,
+                               "score": round(score, 3),
+                               "box": [round(x1), round(y1),
+                                       round(x2), round(y2)],
+                               "color": color})
             draw.rectangle((x1, y1, x2, y2), outline=color, width=2)
             tw = draw.textlength(label, font=font)
             top = y1 - 18 if y1 >= 20 else y2
             draw.rectangle((x1, top, x1 + tw + 8, top + 17), fill=color)
             draw.text((x1 + 4, top + 1), label, fill="#0d1117", font=font)
+        detections.sort(key=lambda d: d["score"], reverse=True)
 
         jpeg = encode_jpeg(np.asarray(img), quality=self._jpeg_quality,
                            colorspace="RGB")
@@ -450,10 +483,25 @@ class ApuDetector:
         self._frame_times.append(now)
         self._frame_times = [t for t in self._frame_times if now - t <= 3.0]
         fps = len(self._frame_times) / 3.0
+        wall = time.time()
         with self._stats_lock:
             self._latest_jpeg = jpeg
             self._stats.update({"fps": round(fps, 1),
                                 "infer_ms": round(infer_ms, 1),
-                                "objects": len(dets), "by_label": by_label})
+                                "objects": len(dets), "by_label": by_label,
+                                "detections": detections})
+            # накопительные счётчики за сессию детекции
+            sess = self._session_stats
+            sess["frames"] += 1
+            for det in detections:
+                s = sess["labels"].get(det["label"])
+                if s is None:
+                    s = sess["labels"][det["label"]] = {
+                        "count": 0, "score_max": 0.0,
+                        "first_seen": wall, "last_seen": wall}
+                s["count"] += 1
+                s["last_seen"] = wall
+                if det["score"] > s["score_max"]:
+                    s["score_max"] = det["score"]
 
 
